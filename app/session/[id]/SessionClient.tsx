@@ -19,6 +19,7 @@ export function SessionClient({ sessionId }: Props) {
   const [assignment, setAssignment] = useState<ReviewAssignment | null>(null)
   const [assignedSubmission, setAssignedSubmission] = useState<Submission | null>(null)
   const [review, setReview] = useState<Review | null>(null)
+  const [receivedReview, setReceivedReview] = useState<string | null>(null)
   const [error, setError] = useState('')
 
   const supabaseRef = useRef(createClient())
@@ -57,6 +58,17 @@ export function SessionClient({ sessionId }: Props) {
           .from('reviews').select('*').eq('assignment_id', asgn.id).single()
         if (rev) setReview(rev)
       }
+
+      // Load the review this participant received on their own submission
+      if (sub) {
+        const { data: inboundAssignment } = await supabase
+          .from('review_assignments').select('id').eq('submission_id', sub.id).single()
+        if (inboundAssignment) {
+          const { data: inboundReview } = await supabase
+            .from('reviews').select('comments').eq('assignment_id', inboundAssignment.id).single()
+          if (inboundReview?.comments) setReceivedReview(inboundReview.comments)
+        }
+      }
     }
 
     load()
@@ -68,9 +80,11 @@ export function SessionClient({ sessionId }: Props) {
         filter: `id=eq.${sessionId}`,
       }, payload => {
         setSession(payload.new as Session)
-        // When review phase starts, reload assignments
         if (payload.new.phase === 'review') {
           loadAssignment(participantId)
+        }
+        if (payload.new.phase === 'complete') {
+          loadReceivedReview(participantId)
         }
       })
       .subscribe()
@@ -78,6 +92,18 @@ export function SessionClient({ sessionId }: Props) {
     return () => { supabase.removeChannel(channel) }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
+
+  async function loadReceivedReview(participantId: string) {
+    const { data: sub } = await supabase
+      .from('submissions').select('id').eq('participant_id', participantId).eq('session_id', sessionId).single()
+    if (!sub) return
+    const { data: inboundAssignment } = await supabase
+      .from('review_assignments').select('id').eq('submission_id', sub.id).single()
+    if (!inboundAssignment) return
+    const { data: inboundReview } = await supabase
+      .from('reviews').select('comments').eq('assignment_id', inboundAssignment.id).single()
+    if (inboundReview?.comments) setReceivedReview(inboundReview.comments)
+  }
 
   async function loadAssignment(participantId: string) {
     const { data: asgn } = await supabase
@@ -146,7 +172,12 @@ export function SessionClient({ sessionId }: Props) {
           </div>
         )}
 
-        {session.phase === 'complete' && <CompletePhase />}
+        {session.phase === 'complete' && (
+          <CompletePhase
+            ownParagraph={submission?.content ?? null}
+            receivedReview={receivedReview}
+          />
+        )}
       </div>
     </main>
   )
