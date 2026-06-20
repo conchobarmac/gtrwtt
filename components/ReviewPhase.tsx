@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Session, Review } from '@/lib/types'
 import { Timer } from './Timer'
 
@@ -15,6 +15,29 @@ interface Props {
 export function ReviewPhase({ session, assignmentId, submissionContent, review, onSubmit }: Props) {
   const [comments, setComments] = useState(review?.comments ?? '')
   const [submitted, setSubmitted] = useState(!!review?.submitted_at)
+  const [saving, setSaving] = useState(false)
+  const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  // Auto-save draft so the server can recover it if the facilitator ends early
+  useEffect(() => {
+    if (submitted) return
+    if (saveTimeout.current) clearTimeout(saveTimeout.current)
+    saveTimeout.current = setTimeout(() => {
+      if (comments.trim()) saveDraft()
+    }, 1500)
+    return () => { if (saveTimeout.current) clearTimeout(saveTimeout.current) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comments])
+
+  async function saveDraft() {
+    setSaving(true)
+    await fetch('/api/reviews', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assignment_id: assignmentId, session_id: session.id, comments, submitted: false }),
+    })
+    setSaving(false)
+  }
 
   const handleSubmit = useCallback(async () => {
     if (submitted || !comments.trim()) return
@@ -66,7 +89,10 @@ export function ReviewPhase({ session, assignmentId, submissionContent, review, 
           className="w-full resize-none text-slate-800 text-sm leading-relaxed focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed"
         />
 
-        <div className="flex justify-end pt-2 border-t border-slate-100">
+        <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+          <span className="text-xs text-slate-400">
+            {saving && !submitted ? 'Saving...' : ' '}
+          </span>
           {submitted
             ? <span className="text-sm font-medium text-emerald-600">Review submitted ✓</span>
             : (

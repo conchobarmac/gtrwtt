@@ -94,9 +94,11 @@ export function SessionClient({ sessionId }: Props) {
   }, [sessionId])
 
   async function loadReceivedReview(participantId: string) {
+    // Fetch full submission in case it was server-auto-submitted and never set in state
     const { data: sub } = await supabase
-      .from('submissions').select('id').eq('participant_id', participantId).eq('session_id', sessionId).single()
+      .from('submissions').select('*').eq('participant_id', participantId).eq('session_id', sessionId).single()
     if (!sub) return
+    setSubmission(sub)
     const { data: inboundAssignment } = await supabase
       .from('review_assignments').select('id').eq('submission_id', sub.id).single()
     if (!inboundAssignment) return
