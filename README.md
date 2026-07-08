@@ -29,6 +29,21 @@ To learn more about Next.js, take a look at the following resources:
 
 You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
 
+## Before running a live session
+
+Phase transitions (writing → review → complete) are pushed to participants via
+a Supabase Realtime subscription, with a polling fallback that checks every
+few seconds if Realtime doesn't fire. Two manual steps in the Supabase
+dashboard are still required and aren't something the app can do for you:
+
+1. **Enable Realtime on the `sessions` table** — Database → Replication →
+   toggle the `sessions` table on. Without this, screens will still advance
+   (via the polling fallback) but with up to a few seconds of extra lag.
+2. **Warm up the project before the session if you're on the free tier** —
+   free-tier Supabase projects pause after a period of inactivity. Open the
+   project dashboard a few minutes before participants join to confirm it's
+   not paused and is responding.
+
 ## Deploy on Vercel
 
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.

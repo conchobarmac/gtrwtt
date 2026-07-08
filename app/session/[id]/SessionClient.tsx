@@ -37,10 +37,30 @@ export function SessionClient({ sessionId }: Props) {
 
     setParticipant({ id: participantId, session_id: sessionId, alias: alias ?? 'Unknown' })
 
+    // Tracks the last phase we've reacted to, shared by the Realtime handler and
+    // the polling fallback below, so a phase change is only acted on once no
+    // matter which path observes it first.
+    let lastPhase: Session['phase'] | null = null
+
+    const applySession = async (sessionData: Session) => {
+      const phaseChanged = lastPhase !== null && lastPhase !== sessionData.phase
+      lastPhase = sessionData.phase
+      setSession(sessionData)
+      if (phaseChanged && sessionData.phase === 'review') {
+        await loadAssignment(participantId)
+      }
+      if (phaseChanged && sessionData.phase === 'complete') {
+        await loadReceivedReview(participantId)
+      }
+    }
+
     async function load() {
       const { data: sessionData } = await supabase
         .from('sessions').select('*').eq('id', sessionId).single()
-      if (sessionData) setSession(sessionData)
+      if (sessionData) {
+        lastPhase = sessionData.phase
+        setSession(sessionData)
+      }
 
       const { data: sub } = await supabase
         .from('submissions').select('*').eq('participant_id', participantId).eq('session_id', sessionId).single()
@@ -79,17 +99,22 @@ export function SessionClient({ sessionId }: Props) {
         event: 'UPDATE', schema: 'public', table: 'sessions',
         filter: `id=eq.${sessionId}`,
       }, payload => {
-        setSession(payload.new as Session)
-        if (payload.new.phase === 'review') {
-          loadAssignment(participantId)
-        }
-        if (payload.new.phase === 'complete') {
-          loadReceivedReview(participantId)
-        }
+        applySession(payload.new as Session)
       })
       .subscribe()
 
-    return () => { supabase.removeChannel(channel) }
+    // Backup for Realtime: if postgres_changes isn't enabled/working for the
+    // sessions table, this still catches phase transitions within a few seconds.
+    const pollInterval = setInterval(async () => {
+      const { data: sessionData } = await supabase
+        .from('sessions').select('*').eq('id', sessionId).single()
+      if (sessionData) applySession(sessionData)
+    }, 4000)
+
+    return () => {
+      clearInterval(pollInterval)
+      supabase.removeChannel(channel)
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 

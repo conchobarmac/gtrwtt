@@ -3,7 +3,6 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
-import { generateAlias } from '@/lib/aliases'
 
 export default function JoinPage() {
   const [code, setCode] = useState('')
@@ -54,21 +53,15 @@ export default function JoinPage() {
       }
     }
 
-    const { count } = await supabase
-      .from('participants')
-      .select('*', { count: 'exact', head: true })
-      .eq('session_id', session.id)
+    const joinResponse = await fetch('/api/participants', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ session_id: session.id }),
+    })
+    const participant = await joinResponse.json()
 
-    const alias = generateAlias(count ?? 0)
-
-    const { data: participant, error: participantError } = await supabase
-      .from('participants')
-      .insert({ session_id: session.id, alias })
-      .select()
-      .single()
-
-    if (participantError) {
-      setError('Failed to join session. Please try again.')
+    if (!joinResponse.ok) {
+      setError(participant.error ?? 'Failed to join session. Please try again.')
       setLoading(false)
       return
     }

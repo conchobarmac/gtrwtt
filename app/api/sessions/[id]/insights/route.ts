@@ -1,14 +1,28 @@
 import { createServiceClient } from '@/lib/supabase/server'
-import OpenAI from 'openai'
+import Anthropic from '@anthropic-ai/sdk'
 
-// Azure OpenAI uses the OpenAI-compatible /openai/v1 endpoint.
-// The SDK sends `Authorization: Bearer {key}`; Azure's new inference endpoint accepts this.
-function getOpenAIClient() {
-  return new OpenAI({
-    apiKey: process.env.AZURE_OPENAI_API_KEY,
-    baseURL: process.env.AZURE_OPENAI_ENDPOINT,
-  })
-}
+const INSIGHTS_SCHEMA = {
+  type: 'object',
+  properties: {
+    strengths: { type: 'array', items: { type: 'string' } },
+    weaknesses: { type: 'array', items: { type: 'string' } },
+    exemplary_paragraphs: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          text: { type: 'string' },
+          reason: { type: 'string' },
+        },
+        required: ['text', 'reason'],
+        additionalProperties: false,
+      },
+    },
+    summary: { type: 'string' },
+  },
+  required: ['strengths', 'weaknesses', 'exemplary_paragraphs', 'summary'],
+  additionalProperties: false,
+} as const
 
 export async function POST(_req: Request, ctx: RouteContext<'/api/sessions/[id]/insights'>) {
   const { id: sessionId } = await ctx.params
@@ -62,34 +76,26 @@ Below are ${pairs.length} pairs of (paragraph, peer review comment). Your task i
 
 ${pairs.map((p, i) => `--- PAIR ${i + 1} ---\nParagraph: ${p.paragraph}\nReview comment: ${p.review}`).join('\n\n')}
 
-Return a JSON object with exactly this structure:
-{
-  "strengths": ["...", "..."],        // 3-5 common strengths observed across the group
-  "weaknesses": ["...", "..."],       // 3-5 common areas for improvement observed across the group
-  "exemplary_paragraphs": [          // 2-3 standout paragraphs (select the actual paragraph text)
-    { "text": "...", "reason": "..." }
-  ],
-  "summary": "..."                   // 2-3 sentence overall summary for the facilitator
-}
+Identify 3-5 common strengths and 3-5 common areas for improvement observed across the group, select 2-3 standout paragraphs (using the actual paragraph text) with a reason each, and write a 2-3 sentence overall summary for the facilitator.
 
-Be specific and constructive. Do not identify individuals. Return only the JSON.`
+Be specific and constructive. Do not identify individuals.`
 
-  const openai = getOpenAIClient()
-  const deployment = process.env.AZURE_OPENAI_DEPLOYMENT ?? 'gpt-4o'
+  const anthropic = new Anthropic()
 
-  const completion = await openai.chat.completions.create({
-    model: deployment,
+  const message = await anthropic.messages.create({
+    model: 'claude-sonnet-5',
+    max_tokens: 4096,
+    thinking: { type: 'adaptive' },
+    output_config: { format: { type: 'json_schema', schema: INSIGHTS_SCHEMA } },
     messages: [{ role: 'user', content: prompt }],
-    response_format: { type: 'json_object' },
-    temperature: 0.4,
   })
 
-  const raw = completion.choices[0].message.content ?? '{}'
+  const textBlock = message.content.find((b): b is Anthropic.TextBlock => b.type === 'text')
   let content
   try {
-    content = JSON.parse(raw)
+    content = JSON.parse(textBlock?.text ?? '{}')
   } catch {
-    return Response.json({ error: 'Failed to parse OpenAI response.' }, { status: 500 })
+    return Response.json({ error: 'Failed to parse Claude response.' }, { status: 500 })
   }
 
   // Add anonymous aliases to exemplary paragraphs

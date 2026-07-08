@@ -9,12 +9,19 @@ interface Props {
   sessionId: string
 }
 
+interface FeedbackRow {
+  alias: string
+  paragraph: string
+  feedback: string | null
+}
+
 export function AdminSessionClient({ sessionId }: Props) {
   const [session, setSession] = useState<Session | null>(null)
   const [participantCount, setParticipantCount] = useState(0)
   const [submissionCount, setSubmissionCount] = useState(0)
   const [reviewCount, setReviewCount] = useState(0)
   const [insight, setInsight] = useState<Insight | null>(null)
+  const [feedbackRows, setFeedbackRows] = useState<FeedbackRow[]>([])
   const [loading, setLoading] = useState<string | null>(null)
   const [error, setError] = useState('')
 
@@ -27,12 +34,16 @@ export function AdminSessionClient({ sessionId }: Props) {
       // Stamp this call; if a newer call starts before this one finishes, discard our results
       const seq = ++loadSeqRef.current
 
-      const [sessionRes, pcRes, scRes, rcRes, insRes] = await Promise.all([
+      const [sessionRes, pcRes, scRes, rcRes, insRes, participantsRes, submissionsRes, assignmentsRes, reviewsRes] = await Promise.all([
         supabase.from('sessions').select('*').eq('id', sessionId).single(),
         supabase.from('participants').select('*', { count: 'exact', head: true }).eq('session_id', sessionId),
         supabase.from('submissions').select('*', { count: 'exact', head: true }).eq('session_id', sessionId).not('submitted_at', 'is', null),
         supabase.from('reviews').select('*', { count: 'exact', head: true }).eq('session_id', sessionId).not('submitted_at', 'is', null),
         supabase.from('insights').select('*').eq('session_id', sessionId).order('generated_at', { ascending: false }).limit(1).single(),
+        supabase.from('participants').select('id, alias').eq('session_id', sessionId),
+        supabase.from('submissions').select('id, participant_id, content').eq('session_id', sessionId).not('content', 'is', null),
+        supabase.from('review_assignments').select('id, submission_id').eq('session_id', sessionId),
+        supabase.from('reviews').select('assignment_id, comments').eq('session_id', sessionId),
       ])
 
       if (seq !== loadSeqRef.current) return // stale — a newer load() already in flight
@@ -42,6 +53,22 @@ export function AdminSessionClient({ sessionId }: Props) {
       setSubmissionCount(scRes.count ?? 0)
       setReviewCount(rcRes.count ?? 0)
       if (insRes.data) setInsight(insRes.data)
+
+      const aliasByParticipant = Object.fromEntries((participantsRes.data ?? []).map(p => [p.id, p.alias]))
+      const assignmentBySubmission = Object.fromEntries((assignmentsRes.data ?? []).map(a => [a.submission_id, a.id]))
+      const commentsByAssignment = Object.fromEntries((reviewsRes.data ?? []).map(r => [r.assignment_id, r.comments]))
+
+      setFeedbackRows(
+        (submissionsRes.data ?? []).map(s => {
+          const assignmentId = assignmentBySubmission[s.id]
+          const feedback = assignmentId ? commentsByAssignment[assignmentId] ?? null : null
+          return {
+            alias: aliasByParticipant[s.participant_id] ?? 'Unknown',
+            paragraph: s.content ?? '',
+            feedback,
+          }
+        })
+      )
     }
 
     load()
@@ -181,6 +208,7 @@ export function AdminSessionClient({ sessionId }: Props) {
         </div>
 
         {insight && <InsightsDisplay insight={insight} />}
+        {insight && <FeedbackListDisplay rows={feedbackRows} />}
       </div>
     </main>
   )
@@ -240,6 +268,35 @@ function InsightsDisplay({ insight }: { insight: Insight }) {
       <div>
         <h3 className="text-sm font-semibold text-slate-600 uppercase tracking-wide mb-2">Summary</h3>
         <p className="text-slate-700 text-sm">{c.summary}</p>
+      </div>
+    </div>
+  )
+}
+
+function FeedbackListDisplay({ rows }: { rows: FeedbackRow[] }) {
+  if (rows.length === 0) return null
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+      <h2 className="text-lg font-semibold text-slate-800">All Paragraphs & Feedback</h2>
+      <div className="space-y-4">
+        {rows.map((row, i) => (
+          <div key={i} className="border border-slate-200 rounded-xl p-4 space-y-3">
+            <span className="text-xs font-mono bg-slate-100 text-slate-500 px-2 py-0.5 rounded-full">
+              {row.alias}
+            </span>
+            <div>
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Paragraph</h3>
+              <p className="text-slate-700 text-sm">{row.paragraph}</p>
+            </div>
+            <div>
+              <h3 className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Feedback received</h3>
+              <p className="text-slate-700 text-sm">
+                {row.feedback ?? <span className="text-slate-400 italic">No feedback submitted</span>}
+              </p>
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   )
