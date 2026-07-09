@@ -34,16 +34,12 @@ export function AdminSessionClient({ sessionId }: Props) {
       // Stamp this call; if a newer call starts before this one finishes, discard our results
       const seq = ++loadSeqRef.current
 
-      const [sessionRes, pcRes, scRes, rcRes, insRes, participantsRes, submissionsRes, assignmentsRes, reviewsRes] = await Promise.all([
+      const [sessionRes, pcRes, scRes, rcRes, insRes] = await Promise.all([
         supabase.from('sessions').select('*').eq('id', sessionId).single(),
         supabase.from('participants').select('*', { count: 'exact', head: true }).eq('session_id', sessionId),
         supabase.from('submissions').select('*', { count: 'exact', head: true }).eq('session_id', sessionId).not('submitted_at', 'is', null),
         supabase.from('reviews').select('*', { count: 'exact', head: true }).eq('session_id', sessionId).not('submitted_at', 'is', null),
         supabase.from('insights').select('*').eq('session_id', sessionId).order('generated_at', { ascending: false }).limit(1).single(),
-        supabase.from('participants').select('id, alias').eq('session_id', sessionId),
-        supabase.from('submissions').select('id, participant_id, content').eq('session_id', sessionId).not('content', 'is', null),
-        supabase.from('review_assignments').select('id, submission_id').eq('session_id', sessionId),
-        supabase.from('reviews').select('assignment_id, comments').eq('session_id', sessionId),
       ])
 
       if (seq !== loadSeqRef.current) return // stale — a newer load() already in flight
@@ -54,21 +50,35 @@ export function AdminSessionClient({ sessionId }: Props) {
       setReviewCount(rcRes.count ?? 0)
       if (insRes.data) setInsight(insRes.data)
 
-      const aliasByParticipant = Object.fromEntries((participantsRes.data ?? []).map(p => [p.id, p.alias]))
-      const assignmentBySubmission = Object.fromEntries((assignmentsRes.data ?? []).map(a => [a.submission_id, a.id]))
-      const commentsByAssignment = Object.fromEntries((reviewsRes.data ?? []).map(r => [r.assignment_id, r.comments]))
+      // Only pull the full paragraph/feedback listing once there's an insights
+      // report to show it alongside — this runs once per session, not on every
+      // join/draft-save/review-submit like the counts above.
+      if (insRes.data) {
+        const [participantsRes, submissionsRes, assignmentsRes, reviewsRes] = await Promise.all([
+          supabase.from('participants').select('id, alias').eq('session_id', sessionId),
+          supabase.from('submissions').select('id, participant_id, content').eq('session_id', sessionId).not('content', 'is', null),
+          supabase.from('review_assignments').select('id, submission_id').eq('session_id', sessionId),
+          supabase.from('reviews').select('assignment_id, comments').eq('session_id', sessionId),
+        ])
 
-      setFeedbackRows(
-        (submissionsRes.data ?? []).map(s => {
-          const assignmentId = assignmentBySubmission[s.id]
-          const feedback = assignmentId ? commentsByAssignment[assignmentId] ?? null : null
-          return {
-            alias: aliasByParticipant[s.participant_id] ?? 'Unknown',
-            paragraph: s.content ?? '',
-            feedback,
-          }
-        })
-      )
+        if (seq !== loadSeqRef.current) return // stale — a newer load() already in flight
+
+        const aliasByParticipant = Object.fromEntries((participantsRes.data ?? []).map(p => [p.id, p.alias]))
+        const assignmentBySubmission = Object.fromEntries((assignmentsRes.data ?? []).map(a => [a.submission_id, a.id]))
+        const commentsByAssignment = Object.fromEntries((reviewsRes.data ?? []).map(r => [r.assignment_id, r.comments]))
+
+        setFeedbackRows(
+          (submissionsRes.data ?? []).map(s => {
+            const assignmentId = assignmentBySubmission[s.id]
+            const feedback = assignmentId ? commentsByAssignment[assignmentId] ?? null : null
+            return {
+              alias: aliasByParticipant[s.participant_id] ?? 'Unknown',
+              paragraph: s.content ?? '',
+              feedback,
+            }
+          })
+        )
+      }
     }
 
     load()

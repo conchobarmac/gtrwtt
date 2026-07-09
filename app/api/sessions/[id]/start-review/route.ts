@@ -65,29 +65,30 @@ export async function POST(_req: Request, ctx: RouteContext<'/api/sessions/[id]/
     submission_id: shuffled[(k + 1) % shuffled.length].id,
   }))
 
-  // Claim the writing->review transition atomically (mirrors start-writing's
-  // lobby->writing guard) so a concurrent double-click can't have both requests
-  // pass the phase check above and then both try to insert assignments.
-  const { data: claimed, error: phaseError } = await supabase
+  // Insert assignments BEFORE flipping the phase — students' clients react to the
+  // phase change immediately (via Realtime/polling) and fetch their assignment
+  // once at that moment, so the assignment rows must already exist by then.
+  const { error: assignError } = await supabase.from('review_assignments').insert(assignments)
+
+  if (assignError) {
+    if (assignError.code === '23505') {
+      // Lost a double-click race — another request already inserted assignments.
+      const { count } = await supabase
+        .from('review_assignments')
+        .select('*', { count: 'exact', head: true })
+        .eq('session_id', sessionId)
+      return Response.json({ ok: true, assignments: count ?? 0, already_started: true })
+    }
+    return Response.json({ error: assignError.message }, { status: 500 })
+  }
+
+  const { error: phaseError } = await supabase
     .from('sessions')
     .update({ phase: 'review', review_started_at: new Date().toISOString() })
     .eq('id', sessionId)
     .eq('phase', 'writing')
-    .select()
 
   if (phaseError) return Response.json({ error: phaseError.message }, { status: 500 })
-
-  if (!claimed || claimed.length === 0) {
-    // Lost the race — another request already moved this session into review.
-    const { count } = await supabase
-      .from('review_assignments')
-      .select('*', { count: 'exact', head: true })
-      .eq('session_id', sessionId)
-    return Response.json({ ok: true, assignments: count ?? 0, already_started: true })
-  }
-
-  const { error: assignError } = await supabase.from('review_assignments').insert(assignments)
-  if (assignError) return Response.json({ error: assignError.message }, { status: 500 })
 
   return Response.json({ ok: true, assignments: assignments.length })
 }
